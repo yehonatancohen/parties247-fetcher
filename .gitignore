@@ -1,0 +1,5 @@
+/auth_payload
+/.vscode
+.env
+*.json
+*.pyc
