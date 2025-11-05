@@ -1,59 +1,48 @@
-import requests, json, datetime, time, pathlib
+"""Fetch Tel Aviv nightlife events from Go Out."""
+from __future__ import annotations
 
-OUTPUT_FILE = pathlib.Path("events_nightlife.json")
+import json
+import logging
+from datetime import datetime, timezone
+from pathlib import Path
+from typing import List, Optional
 
-def run_job():
-    """Fetch Tel Aviv nightlife events."""
-    url = "https://www.go-out.co/endOne/getEventsByTypeNew"
-    headers = {
-        'accept': '*/*',
-        'accept-language': 'en-US,en;q=0.9,he;q=0.8',
-        'content-type': 'application/json',
-        'origin': 'https://www.go-out.co',
-        'priority': 'u=1, i',
-        'referer': 'https://www.go-out.co/tickets/nightlife',
-        'sec-ch-ua': '"Chromium";v="140", "Not=A?Brand";v="24", "Google Chrome";v="140"',
-        'sec-ch-ua-mobile': '?0',
-        'sec-ch-ua-platform': '"Windows"',
-        'sec-fetch-dest': 'empty',
-        'sec-fetch-mode': 'cors',
-        'sec-fetch-site': 'same-origin',
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/140.0.0.0 Safari/537.36',
-    }
+from jobs.event_records import EventRecord, build_event_records
+from jobs.go_out import GoOutFetcher
+
+LOGGER = logging.getLogger(__name__)
+OUTPUT_FILE = Path("events_nightlife.json")
+
+
+def run_job(
+    referral: Optional[str] = None, output_file: Path = OUTPUT_FILE
+) -> List[EventRecord]:
+    """Fetch nightlife events and persist them to *output_file*.
+
+    Parameters
+    ----------
+    referral:
+        Optional affiliate identifier appended to generated URLs.
+    output_file:
+        File that will store the JSON representation of the fetched event records.
+    """
+    fetcher = GoOutFetcher(referral=referral)
+    urls = fetcher.fetch_nightlife_events()
+    records = build_event_records("nightlife", urls)
+    _write_event_records(output_file, records)
+    LOGGER.info("Saved %%d nightlife events to %%s", len(records), output_file)
+    return records
+
+
+def _write_event_records(path: Path, records: List[EventRecord]) -> None:
     payload = {
-        "skip": 0,
-        "Types": ["תל אביב", "מועדוני לילה"],
-        "limit": 100,
-        "recivedDate": datetime.datetime.utcnow().isoformat(),
-        "location": "IL"
+        "retrieved_at": datetime.now(tz=timezone.utc).isoformat(),
+        "count": len(records),
+        "events": records,
     }
-    headers = {"Content-Type": "application/json"}
-
-    r = requests.post(url, headers=headers, json=payload, timeout=30)
-    r.raise_for_status()
-    data = r.json()
-
-    urls = [
-        f"https://www.go-out.co/event/{item['Url']}?aff={{ref}}"
-        for item in data.get("events", [])
-        if "Url" in item
-    ]
-
-    add_parties_to_carousel_from_urls(urls, "חיי לילה")
-    save_json(data)
-    print(f"[{time.ctime()}] Saved {len(urls)} nightlife events")
-    return data
+    path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def add_parties_to_carousel_from_urls(urls, carousel_name):
-    """Placeholder: integrate your real carousel handler here."""
-    print(f"Adding {len(urls)} parties to carousel '{carousel_name}'")
-
-
-def save_json(data):
-    with open(OUTPUT_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, ensure_ascii=False, indent=2)
-
-
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
+    logging.basicConfig(level=logging.INFO)
     run_job()
