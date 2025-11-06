@@ -11,6 +11,7 @@ from typing import Dict, List, Optional
 
 import requests
 
+from jobs.backend import PartiesAdminClient
 from jobs.event_records import EventRecord, build_event_records
 from jobs.go_out import _collect_go_out_event_urls
 
@@ -19,9 +20,9 @@ LOGGER = logging.getLogger(__name__)
 PAYLOAD_DIR = Path("auth_payload")
 TOKEN_FILE = PAYLOAD_DIR / "token.txt"
 COOKIES_FILE = PAYLOAD_DIR / "cookies.json"
-OUTPUT_FILE = Path("events.json")
 LOGIN_URL = "https://api.fe.prod.go-out.co/auth/login"
 EVENTS_URL = "https://api.fe.prod.go-out.co/events/myEvents"
+CAROUSEL_NAME = "my_events"
 
 
 class AuthenticationError(RuntimeError):
@@ -72,7 +73,7 @@ def renew_token_from_env(session: Optional[requests.Session] = None) -> str:
     try:
         TOKEN_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)
     except OSError:  # pragma: no cover - permissions vary
-        LOGGER.debug("Unable to set permissions on %%s", TOKEN_FILE)
+        LOGGER.debug("Unable to set permissions on %s", TOKEN_FILE)
     LOGGER.info("Renewed Go Out API token")
     return token
 
@@ -111,20 +112,6 @@ def fetch_events(session: Optional[requests.Session] = None) -> Dict[str, object
     return response.json()
 
 
-def save_events(
-    data: Dict[str, object],
-    records: List[EventRecord],
-    output_file: Path = OUTPUT_FILE,
-) -> None:
-    payload = {
-        "retrieved_at": datetime.now(tz=timezone.utc).isoformat(),
-        "count": len(records),
-        "events": records,
-        "raw": data,
-    }
-    output_file.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
-
-
 def _extract_event_records(data: Dict[str, object]) -> List[EventRecord]:
     """Extract affiliate-ready URLs from ``my events`` API payloads."""
 
@@ -134,15 +121,27 @@ def _extract_event_records(data: Dict[str, object]) -> List[EventRecord]:
         if isinstance(raw_events, list):
             events = raw_events
     urls = _collect_go_out_event_urls(events, referral=None)
-    return build_event_records("my_events", urls)
+    return build_event_records(CAROUSEL_NAME, urls)
 
 
-def run_job(output_file: Path = OUTPUT_FILE) -> List[EventRecord]:
-    session = requests.Session()
+def run_job(
+    *,
+    admin_client: Optional[PartiesAdminClient] = None,
+    session: Optional[requests.Session] = None,
+) -> List[EventRecord]:
+    """Fetch "my events" data and upload event URLs to the backend."""
+
+    session = session or requests.Session()
     data = fetch_events(session=session)
     records = _extract_event_records(data)
-    save_events(data, records, output_file=output_file)
-    LOGGER.info("Fetched %%d 'my events' URLs", len(records))
+
+    client = admin_client or PartiesAdminClient()
+    client.import_carousel_urls(
+        carousel_name=CAROUSEL_NAME,
+        referral=None,
+        urls=[record["url"] for record in records],
+    )
+    LOGGER.info("Uploaded %d 'my events' URLs", len(records))
     return records
 
 
