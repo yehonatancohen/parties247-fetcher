@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-import json
-from pathlib import Path
 from typing import List
 
 import pytest
@@ -21,7 +19,20 @@ class DummyFetcher:
         return self._urls
 
 
-def test_nightlife_run_job_returns_records(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+class DummyAdminClient:
+    def __init__(self) -> None:
+        self.calls = []
+
+    def import_carousel_urls(self, *, carousel_name: str, referral, urls: List[str]):
+        self.calls.append({
+            "carousel_name": carousel_name,
+            "referral": referral,
+            "urls": list(urls),
+        })
+        return {"message": "ok"}
+
+
+def test_nightlife_run_job_returns_records(monkeypatch: pytest.MonkeyPatch) -> None:
     urls = ["https://example.com/event/a"]
 
     def fake_fetcher(*, referral=None):
@@ -29,17 +40,21 @@ def test_nightlife_run_job_returns_records(tmp_path: Path, monkeypatch: pytest.M
         return DummyFetcher(urls)
 
     monkeypatch.setattr(nightlife, "GoOutFetcher", fake_fetcher)
-    output_file = tmp_path / "nightlife.json"
+    client = DummyAdminClient()
 
-    records = nightlife.run_job(referral="ref", output_file=output_file)
+    records = nightlife.run_job(referral="ref", admin_client=client)
 
     assert records == [{"title": "nightlife", "url": urls[0]}]
-    payload = json.loads(output_file.read_text(encoding="utf-8"))
-    assert payload["events"] == records
-    assert payload["count"] == 1
+    assert client.calls == [
+        {
+            "carousel_name": "nightlife",
+            "referral": "ref",
+            "urls": urls,
+        }
+    ]
 
 
-def test_weekend_run_job_returns_records(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_weekend_run_job_returns_records(monkeypatch: pytest.MonkeyPatch) -> None:
     urls = ["https://example.com/event/weekend"]
 
     def fake_fetcher(*, referral=None):
@@ -47,17 +62,21 @@ def test_weekend_run_job_returns_records(tmp_path: Path, monkeypatch: pytest.Mon
         return DummyFetcher(urls)
 
     monkeypatch.setattr(weekend, "GoOutFetcher", fake_fetcher)
-    output_file = tmp_path / "weekend.json"
+    client = DummyAdminClient()
 
-    records = weekend.run_job(referral="ref", output_file=output_file)
+    records = weekend.run_job(referral="ref", admin_client=client)
 
     assert records == [{"title": "weekend", "url": urls[0]}]
-    payload = json.loads(output_file.read_text(encoding="utf-8"))
-    assert payload["events"] == records
-    assert payload["count"] == 1
+    assert client.calls == [
+        {
+            "carousel_name": "weekend",
+            "referral": "ref",
+            "urls": urls,
+        }
+    ]
 
 
-def test_my_events_run_job_extracts_urls(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+def test_my_events_run_job_extracts_urls(monkeypatch: pytest.MonkeyPatch) -> None:
     data = {
         "events": [
             {"Url": "first"},
@@ -71,14 +90,18 @@ def test_my_events_run_job_extracts_urls(tmp_path: Path, monkeypatch: pytest.Mon
         pass
 
     monkeypatch.setattr(my_events.requests, "Session", lambda: FakeSession())
+    client = DummyAdminClient()
 
-    output_file = tmp_path / "my_events.json"
-    records = my_events.run_job(output_file=output_file)
+    records = my_events.run_job(admin_client=client)
 
     assert records == [
         {"title": "my_events", "url": f"{GO_OUT_EVENT_BASE_URL}first"},
         {"title": "my_events", "url": f"{GO_OUT_EVENT_BASE_URL}second"},
     ]
-    payload = json.loads(output_file.read_text(encoding="utf-8"))
-    assert payload["events"] == records
-    assert payload["raw"] == data
+    assert client.calls == [
+        {
+            "carousel_name": "my_events",
+            "referral": None,
+            "urls": [record["url"] for record in records],
+        }
+    ]
