@@ -7,7 +7,7 @@ import os
 import stat
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional
 
 import requests
 
@@ -20,6 +20,8 @@ LOGGER = logging.getLogger(__name__)
 PAYLOAD_DIR = Path("auth_payload")
 TOKEN_FILE = PAYLOAD_DIR / "token.txt"
 COOKIES_FILE = PAYLOAD_DIR / "cookies.json"
+LOCAL_STORAGE_TOKEN_KEY = "authToken"
+GOOUT_TOKEN_ENV = "GOOUT_TOKEN"
 LOGIN_URL = "https://api.fe.prod.go-out.co/auth/login"
 EVENTS_URL = "https://api.fe.prod.go-out.co/events/myEvents"
 CAROUSEL_NAME = "my_events"
@@ -37,7 +39,103 @@ def _get_env_creds() -> tuple[str, str]:
     return email, password
 
 
+def _get_env_token() -> str:
+    token = os.environ.get(GOOUT_TOKEN_ENV)
+    if not token:
+        raise AuthenticationError(f"{GOOUT_TOKEN_ENV} must be set to bootstrap authentication")
+    return token
+
+
+def _write_token_file(token: str) -> None:
+    TOKEN_FILE.write_text(token, encoding="utf-8")
+    try:
+        TOKEN_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:  # pragma: no cover - permissions vary by platform
+        LOGGER.debug("Unable to set permissions on %s", TOKEN_FILE)
+
+
+def _write_cookies_file(cookies: Mapping[str, str]) -> None:
+    with COOKIES_FILE.open("w", encoding="utf-8") as file:
+        json.dump(dict(cookies), file, ensure_ascii=False, indent=2)
+    try:
+        COOKIES_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)
+    except OSError:  # pragma: no cover - permissions vary by platform
+        LOGGER.debug("Unable to set permissions on %s", COOKIES_FILE)
+
+
+def _create_webdriver() -> Any:
+    try:
+        from selenium import webdriver
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise AuthenticationError("Selenium is required to bootstrap Go Out authentication") from exc
+
+    options = webdriver.ChromeOptions()
+    options.add_argument("--headless=new")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    return webdriver.Chrome(options=options)
+
+
+def _fetch_cookies_via_selenium(
+    token: str,
+    *,
+    webdriver_factory: Optional[Callable[[], Any]] = None,
+) -> Dict[str, str]:
+    factory = webdriver_factory or _create_webdriver
+    driver = factory()
+    try:
+        driver.get("https://www.go-out.co/")
+        try:
+            driver.add_cookie({"name": "token", "value": token})
+        except Exception:  # pragma: no cover - browser specific behaviour
+            LOGGER.debug("Unable to persist token as cookie via Selenium")
+        try:
+            driver.execute_script(
+                "window.localStorage.setItem(arguments[0], arguments[1]);",
+                LOCAL_STORAGE_TOKEN_KEY,
+                token,
+            )
+        except Exception:  # pragma: no cover - browser specific behaviour
+            LOGGER.debug("Unable to persist token to localStorage via Selenium")
+        try:
+            driver.refresh()
+        except Exception:  # pragma: no cover - browser specific behaviour
+            LOGGER.debug("Unable to refresh Selenium page after authentication bootstrap")
+        raw_cookies = driver.get_cookies() or []
+    finally:
+        try:
+            driver.quit()
+        except Exception:  # pragma: no cover - browser specific behaviour
+            LOGGER.debug("Unable to gracefully quit Selenium webdriver")
+
+    cookies: Dict[str, str] = {}
+    for entry in raw_cookies:
+        if not isinstance(entry, Mapping):
+            continue
+        name = entry.get("name")
+        value = entry.get("value")
+        if not name or value is None:
+            continue
+        cookies[str(name)] = str(value)
+    return cookies
+
+
+def _ensure_auth_payload_initialized(*, webdriver_factory: Optional[Callable[[], Any]] = None) -> None:
+    if PAYLOAD_DIR.exists() and TOKEN_FILE.exists() and COOKIES_FILE.exists():
+        return
+
+    PAYLOAD_DIR.mkdir(parents=True, exist_ok=True)
+    token = _get_env_token()
+    _write_token_file(token)
+
+    cookies = _fetch_cookies_via_selenium(token, webdriver_factory=webdriver_factory)
+    if not cookies:
+        LOGGER.warning("No cookies were retrieved via Selenium; authentication may fail")
+    _write_cookies_file(cookies)
+
+
 def _read_token() -> str:
+    _ensure_auth_payload_initialized()
     try:
         return TOKEN_FILE.read_text(encoding="utf-8").strip()
     except FileNotFoundError as exc:  # pragma: no cover - configuration issue
@@ -45,6 +143,7 @@ def _read_token() -> str:
 
 
 def _read_cookies() -> Dict[str, str]:
+    _ensure_auth_payload_initialized()
     try:
         with COOKIES_FILE.open(encoding="utf-8") as file:
             content = json.load(file)
@@ -69,11 +168,7 @@ def renew_token_from_env(session: Optional[requests.Session] = None) -> str:
     if not token:
         raise AuthenticationError("No token provided in authentication response")
     PAYLOAD_DIR.mkdir(parents=True, exist_ok=True)
-    TOKEN_FILE.write_text(token, encoding="utf-8")
-    try:
-        TOKEN_FILE.chmod(stat.S_IRUSR | stat.S_IWUSR)
-    except OSError:  # pragma: no cover - permissions vary
-        LOGGER.debug("Unable to set permissions on %s", TOKEN_FILE)
+    _write_token_file(token)
     LOGGER.info("Renewed Go Out API token")
     return token
 
