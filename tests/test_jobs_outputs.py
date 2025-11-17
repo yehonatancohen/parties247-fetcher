@@ -21,15 +21,20 @@ class DummyFetcher:
 
 class DummyAdminClient:
     def __init__(self) -> None:
-        self.calls = []
+        self.carousel_calls = []
+        self.add_party_calls = []
 
     def import_carousel_urls(self, *, carousel_name: str, referral, urls: List[str]):
-        self.calls.append({
+        self.carousel_calls.append({
             "carousel_name": carousel_name,
             "referral": referral,
             "urls": list(urls),
         })
         return {"message": "ok"}
+
+    def add_party_urls(self, *, urls: List[str]):
+        self.add_party_calls.append(list(urls))
+        return [{"message": "ok"} for _ in urls]
 
 
 def test_nightlife_run_job_returns_records(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -45,13 +50,14 @@ def test_nightlife_run_job_returns_records(monkeypatch: pytest.MonkeyPatch) -> N
     records = nightlife.run_job(referral="ref", admin_client=client)
 
     assert records == [{"title": "nightlife", "url": urls[0]}]
-    assert client.calls == [
+    assert client.carousel_calls == [
         {
             "carousel_name": "nightlife",
             "referral": "ref",
             "urls": urls,
         }
     ]
+    assert client.add_party_calls == []
 
 
 def test_weekend_run_job_returns_records(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -67,13 +73,14 @@ def test_weekend_run_job_returns_records(monkeypatch: pytest.MonkeyPatch) -> Non
     records = weekend.run_job(referral="ref", admin_client=client)
 
     assert records == [{"title": "weekend", "url": urls[0]}]
-    assert client.calls == [
+    assert client.carousel_calls == [
         {
             "carousel_name": "weekend",
             "referral": "ref",
             "urls": urls,
         }
     ]
+    assert client.add_party_calls == []
 
 
 def test_my_events_run_job_extracts_urls(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -98,10 +105,5 @@ def test_my_events_run_job_extracts_urls(monkeypatch: pytest.MonkeyPatch) -> Non
         {"title": "my_events", "url": f"{GO_OUT_EVENT_BASE_URL}first"},
         {"title": "my_events", "url": f"{GO_OUT_EVENT_BASE_URL}second"},
     ]
-    assert client.calls == [
-        {
-            "carousel_name": "my_events",
-            "referral": None,
-            "urls": [record["url"] for record in records],
-        }
-    ]
+    assert client.carousel_calls == []
+    assert client.add_party_calls == [[record["url"] for record in records]]

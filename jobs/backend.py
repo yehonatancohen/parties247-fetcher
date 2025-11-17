@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Dict, Mapping, Optional, Sequence
+from typing import Dict, List, Mapping, Optional, Sequence
 from urllib import parse as urllib_parse
 
 import requests
@@ -15,8 +15,9 @@ LOGGER = logging.getLogger(__name__)
 DEFAULT_BASE_URL = "https://parties247-backend.onrender.com"
 LOGIN_ENDPOINT = "/api/admin/login"
 IMPORT_ENDPOINT = "/api/admin/import/carousel-urls"
+ADD_PARTY_ENDPOINT = "/api/admin/add-party"
 PASSWORD_ENV_VAR = "PARTIES247_ADMIN_PASSWORD"
-DEFAULT_ENV_PATH = Path(".env")
+DEFAULT_ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 
 
 class BackendError(RuntimeError):
@@ -144,6 +145,44 @@ class PartiesAdminClient:
             return response.json()
         except json.JSONDecodeError as exc:  # pragma: no cover - unexpected backend issue
             raise BackendError("Backend response was not valid JSON") from exc
+
+    def add_party_url(self, url: str) -> Dict[str, object]:
+        """Send a single event URL to the backend for ingestion."""
+
+        if not url:
+            raise ValueError("url must be provided")
+
+        headers = dict(self._authorization_header())
+        payload = {"url": url}
+        response = self._session.post(
+            self._url(ADD_PARTY_ENDPOINT),
+            json=payload,
+            headers=headers,
+            timeout=20,
+        )
+        if response.status_code == 401:
+            LOGGER.info("Backend token expired while adding party, retrying")
+            self._token = None
+            headers = dict(self._authorization_header())
+            response = self._session.post(
+                self._url(ADD_PARTY_ENDPOINT),
+                json=payload,
+                headers=headers,
+                timeout=20,
+            )
+        response.raise_for_status()
+        try:
+            return response.json()
+        except json.JSONDecodeError as exc:  # pragma: no cover - unexpected backend issue
+            raise BackendError("Backend response was not valid JSON") from exc
+
+    def add_party_urls(self, urls: Sequence[str]) -> List[Dict[str, object]]:
+        """Send multiple event URLs to the backend."""
+
+        results: List[Dict[str, object]] = []
+        for url in urls:
+            results.append(self.add_party_url(url))
+        return results
 
 
 __all__ = [

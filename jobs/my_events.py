@@ -231,12 +231,9 @@ def run_job(
     records = _extract_event_records(data)
 
     client = admin_client or PartiesAdminClient()
-    client.import_carousel_urls(
-        carousel_name=CAROUSEL_NAME,
-        referral=None,
-        urls=[record["url"] for record in records],
-    )
-    LOGGER.info("Uploaded %d 'my events' URLs", len(records))
+    urls = [record["url"] for record in records]
+    client.add_party_urls(urls=urls)
+    LOGGER.info("Sent %d 'my events' URLs to backend", len(records))
     return records
 
 
