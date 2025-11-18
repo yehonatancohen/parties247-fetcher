@@ -28,8 +28,6 @@ def run(referral: Optional[str] = None) -> List[EventRecord]:
     """Run all fetch jobs and return merged event records."""
 
     collections = [
-        nightlife.run_job(referral=referral),
-        weekend.run_job(referral=referral),
         my_events.run_job(),
     ]
     return merge_event_records(collections)

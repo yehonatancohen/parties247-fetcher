@@ -170,7 +170,17 @@ class PartiesAdminClient:
                 headers=headers,
                 timeout=20,
             )
-        response.raise_for_status()
+        if response.status_code == 409:
+            try:
+                return response.json()
+            except json.JSONDecodeError:  # pragma: no cover - unexpected backend issue
+                return {"detail": "Party already added", "status_code": 409}
+        try:
+            response.raise_for_status()
+        except requests.HTTPError as e:
+            error_detail = response.json().get("detail", str(e))
+            LOGGER.error(f"Failed to add party URL '{url}': {error_detail}")
+            return {"detail": error_detail, "status_code": response.status_code}
         try:
             return response.json()
         except json.JSONDecodeError as exc:  # pragma: no cover - unexpected backend issue

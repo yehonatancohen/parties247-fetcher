@@ -189,7 +189,7 @@ def fetch_events(session: Optional[requests.Session] = None) -> Dict[str, object
     response = session.get(
         EVENTS_URL,
         headers=headers,
-        cookies=_read_cookies(),
+        #cookies=_read_cookies(),
         params=params,
         timeout=20,
     )
