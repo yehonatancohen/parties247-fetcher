@@ -5,7 +5,7 @@ import json
 import logging
 import os
 from pathlib import Path
-from typing import Dict, List, Mapping, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 from urllib import parse as urllib_parse
 
 import requests
@@ -172,26 +172,59 @@ class PartiesAdminClient:
             )
         if response.status_code == 409:
             try:
-                return response.json()
+                conflict_payload: Any = response.json()
             except json.JSONDecodeError:  # pragma: no cover - unexpected backend issue
-                return {"detail": "Party already added", "status_code": 409}
+                conflict_payload = {}
+            if not isinstance(conflict_payload, dict):
+                conflict_payload = {}
+            conflict_payload.setdefault("detail", "Party already added")
+            conflict_payload.setdefault("status_code", response.status_code)
+            LOGGER.info(
+                "Backend reported existing party for %s: %s",
+                url,
+                conflict_payload.get("detail"),
+            )
+            return conflict_payload
         try:
             response.raise_for_status()
-        except requests.HTTPError as e:
-            error_detail = response.json().get("detail", str(e))
-            LOGGER.error(f"Failed to add party URL '{url}': {error_detail}")
+        except requests.HTTPError as exc:
+            try:
+                error_payload: Any = response.json()
+            except json.JSONDecodeError:
+                error_payload = {}
+            error_detail: str
+            if isinstance(error_payload, Mapping):
+                error_detail = str(error_payload.get("detail") or str(exc))
+            else:
+                error_detail = str(exc)
+            LOGGER.error("Failed to add party URL '%s': %s", url, error_detail)
             return {"detail": error_detail, "status_code": response.status_code}
         try:
-            return response.json()
+            payload = response.json()
         except json.JSONDecodeError as exc:  # pragma: no cover - unexpected backend issue
             raise BackendError("Backend response was not valid JSON") from exc
+        if not isinstance(payload, dict):
+            payload = {"data": payload}
+        payload.setdefault("status_code", response.status_code)
+        payload.setdefault("detail", "Party added successfully")
+        return payload
 
     def add_party_urls(self, urls: Sequence[str]) -> List[Dict[str, object]]:
-        """Send multiple event URLs to the backend."""
+        """Send multiple event URLs to the backend and log their statuses."""
 
         results: List[Dict[str, object]] = []
+        status_lines: List[str] = []
         for url in urls:
-            results.append(self.add_party_url(url))
+            result = self.add_party_url(url)
+            results.append(result)
+            status_code = result.get("status_code")
+            detail = result.get("detail")
+            status_line = f"{url}: {status_code}"
+            if detail:
+                status_line += f" - {detail}"
+            status_lines.append(status_line)
+        if status_lines:
+            LOGGER.info("Party add statuses: %s", "; ".join(status_lines))
         return results
 
 
